@@ -20,8 +20,9 @@ use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
+use crate::mm::{MapPermission, VirtAddr};
 pub use task::{TaskControlBlock, TaskStatus};
-
+use crate::timer::get_time_ms;
 pub use context::TaskContext;
 
 /// The task manager, where all the tasks are managed.
@@ -79,6 +80,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.time = get_time_ms();
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -133,6 +135,40 @@ impl TaskManager {
         inner.tasks[cur].change_program_brk(size)
     }
 
+    /// Add implement of counting syscall times
+    fn count_syscall(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+    }
+
+    /// map new memories for cur task
+    fn insert_framed_area(&self, start: VirtAddr, end: VirtAddr, permission: MapPermission) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.insert_framed_area(start, end, permission);
+    }
+
+    /// drop vmem for cur task
+    fn delete_framed_area(&self, start: VirtAddr, end: VirtAddr) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.delete_framed_area(start, end);
+    }
+
+    /// get time
+    fn get_cur_task_time(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].time
+    }
+    /// get slice of syscall times
+    fn get_cur_task_syscall_times(&self) -> [u32; 500] {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times
+    }
+
     /// Switch current `Running` task to the task we have found,
     /// or there is no `Ready` task and we can exit with all applications completed
     fn run_next_task(&self) {
@@ -140,6 +176,9 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            if inner.tasks[next].time == 0{
+                inner.tasks[next].time = get_time_ms();
+            }
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -201,4 +240,27 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// wrap for count_syscall
+pub fn count_syscall(syscall_id: usize) {
+    TASK_MANAGER.count_syscall(syscall_id);
+}
+
+/// wrap for insert_framed_area
+pub fn insert_framed_area(start: VirtAddr, end: VirtAddr, permission: MapPermission) {
+    TASK_MANAGER.insert_framed_area(start, end, permission);
+}
+
+/// wrap for delete_framed_area
+pub fn delete_framed_area(start: VirtAddr, end: VirtAddr) {
+    TASK_MANAGER.delete_framed_area(start, end);
+}
+/// wrap for get_cur_task_time
+pub fn get_current_task_time()->usize{
+    TASK_MANAGER.get_cur_task_time()
+}
+/// wrap for get_cur_task_syscall_times
+pub fn get_current_task_syscall_times() -> [u32; 500] {
+    TASK_MANAGER.get_cur_task_syscall_times()
 }
