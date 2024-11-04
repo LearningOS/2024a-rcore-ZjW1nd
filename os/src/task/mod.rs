@@ -19,6 +19,7 @@ use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
 use switch::__switch;
+use crate::timer::get_time_ms;// add
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
@@ -29,7 +30,7 @@ pub use context::TaskContext;
 /// and task context switching. For convenience, you can find wrappers around it
 /// in the module level.
 ///
-/// Most of `TaskManager` are hidden behind the field `inner`, to defer
+/// Most of `TaskManager` are hidden behind thze field `inner`, to defer
 /// borrowing checks to runtime. You can see examples on how to use `inner` in
 /// existing functions on `TaskManager`.
 pub struct TaskManager {
@@ -47,6 +48,7 @@ pub struct TaskManagerInner {
     current_task: usize,
 }
 
+
 lazy_static! {
     /// Global variable: TASK_MANAGER
     pub static ref TASK_MANAGER: TaskManager = {
@@ -54,6 +56,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            time: 0,
+            syscall_times: [0; 500],
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -80,6 +84,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
+        task0.time = get_time_ms();
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -122,6 +127,9 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            if inner.tasks[next].time == 0{
+                inner.tasks[next].time = get_time_ms();
+            }
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -133,6 +141,23 @@ impl TaskManager {
             // go back to user mode
         } else {
             panic!("All applications completed!");
+        }
+    }
+
+    fn count_syscall(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+    }
+
+    /// Get the task control block by task id, and return a copy of it.
+    fn get_tcb_by_id(&self, id: usize) -> TaskControlBlock {
+        let inner = self.inner.exclusive_access();
+        let tcb = inner.tasks[id];
+        if id < inner.tasks.len() {
+            tcb
+        } else {
+            panic!("Invalid task id: {}", id);
         }
     }
 }
@@ -158,14 +183,33 @@ fn mark_current_exited() {
     TASK_MANAGER.mark_current_exited();
 }
 
+/// Get the current `Running` task idx
+fn get_current_task()->usize{
+    TASK_MANAGER.inner.exclusive_access().current_task
+}
 /// Suspend the current 'Running' task and run the next task in task list.
 pub fn suspend_current_and_run_next() {
     mark_current_suspended();
     run_next_task();
 }
 
+/// wrap function for get_current_task
+pub fn get_cur_task()->usize{
+    get_current_task()
+}
+
 /// Exit the current 'Running' task and run the next task in task list.
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// wrap for get_tcb_by_id, tcb有copy trait,直接取出来
+pub fn get_tcb_copy(id: usize) -> TaskControlBlock {
+    TASK_MANAGER.get_tcb_by_id(id)
+}
+
+/// wrap for count_syscall
+pub fn count_syscall(syscall_id: usize) {
+    TASK_MANAGER.count_syscall(syscall_id);
 }

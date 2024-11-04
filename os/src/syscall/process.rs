@@ -1,12 +1,13 @@
 //! Process management syscalls
 use crate::{
     config::MAX_SYSCALL_NUM,
-    task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus},
-    timer::get_time_us,
+    task::{exit_current_and_run_next, get_cur_task, suspend_current_and_run_next, get_tcb_copy, TaskStatus},
+    timer::{get_time_us,get_time_ms},
 };
 
 #[repr(C)]
 #[derive(Debug)]
+#[derive(Clone, Copy)]
 pub struct TimeVal {
     pub sec: usize,
     pub usec: usize,
@@ -53,5 +54,20 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 /// YOUR JOB: Finish sys_task_info to pass testcases
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
     trace!("kernel: sys_task_info");
-    -1
+    // 首先想办法获取当前进程的tcb,取时间。
+    // 500个编号，每个进程单独统计，再压缩也压缩不了了
+    let cur_task = get_cur_task();
+    let cur_task_tcb = get_tcb_copy(cur_task);
+    let time = if cur_task_tcb.time == 0 {
+        0
+    } else {
+        get_time_ms()-cur_task_tcb.time
+    };
+    unsafe {
+        // always current task
+        (*_ti).status = TaskStatus::Running;
+        (*_ti).time = time;
+        (*_ti).syscall_times = cur_task_tcb.syscall_times;
+    }
+    0
 }
