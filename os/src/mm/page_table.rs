@@ -6,15 +6,23 @@ use alloc::vec::Vec;
 use bitflags::*;
 
 bitflags! {
-    /// page table entry flags
+    ///page table entry flags
     pub struct PTEFlags: u8 {
+        /// Valid
         const V = 1 << 0;
+        /// Readable
         const R = 1 << 1;
+        /// Writable
         const W = 1 << 2;
+        /// Executable
         const X = 1 << 3;
+        /// User
         const U = 1 << 4;
+        /// Global
         const G = 1 << 5;
+        /// Accessed
         const A = 1 << 6;
+        /// Dirty
         const D = 1 << 7;
     }
 }
@@ -212,4 +220,15 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
         .translate_va(VirtAddr::from(va))
         .unwrap()
         .get_mut()
+}
+
+/// virt to phys, 手搓页表查询
+pub fn virt_to_phys(token: usize, vaddr: usize) -> usize {
+    let vaddr_t: VirtAddr = vaddr.into();
+    let vpn = vaddr_t.floor();
+    let page_table_t = PageTable::from_token(token);
+    let ppn = page_table_t.translate(vpn).unwrap().ppn();// bad, panic if no entry
+    let ppn:usize = ppn.into();// shadow
+    let paddr = ppn<<12 | vaddr_t.page_offset();
+    paddr
 }
