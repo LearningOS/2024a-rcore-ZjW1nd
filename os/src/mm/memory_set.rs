@@ -66,7 +66,21 @@ impl MemorySet {
             None,
         );
     }
-    /// remove a area
+    /// delete start to end.
+    pub fn delete_framed_area(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr
+    )
+    {
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            self.page_table.unmap(vpn);
+        }
+    }
+
+    /// remove a area <- new func
     pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
         if let Some((idx, area)) = self
             .areas

@@ -10,6 +10,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
+use crate::task::BIG_STRIDE;
 
 /// Task control block structure
 ///
@@ -23,7 +24,7 @@ pub struct TaskControlBlock {
     pub kernel_stack: KernelStack,
 
     /// Mutable
-    inner: UPSafeCell<TaskControlBlockInner>,
+    pub inner: UPSafeCell<TaskControlBlockInner>,
 }
 
 impl TaskControlBlock {
@@ -37,7 +38,7 @@ impl TaskControlBlock {
         inner.memory_set.token()
     }
 }
-
+/// Inner of tcb
 pub struct TaskControlBlockInner {
     /// The physical page number of the frame where the trap context is placed
     pub trap_cx_ppn: PhysPageNum,
@@ -71,6 +72,16 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    /// 第一次被调度时间
+    pub time: usize,
+    /// 使用的各个系统调用次数
+    pub syscall_times: [u32; 500],
+    /// Stride 
+    pub stride: isize,
+    /// pass
+    pub pass: isize,
+    /// priority 为什么都是有符号数？
+    pub priority: isize,
 }
 
 impl TaskControlBlockInner {
@@ -83,6 +94,7 @@ impl TaskControlBlockInner {
     fn get_status(&self) -> TaskStatus {
         self.task_status
     }
+    /// is zombie
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
     }
@@ -135,6 +147,11 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    time : 0,
+                    syscall_times: [0;500],
+                    stride: 0,
+                    pass: BIG_STRIDE / 16,
+                    priority: 16,
                 })
             },
         };
@@ -216,6 +233,11 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    time : 0,
+                    syscall_times: [0;500],
+                    stride: 0,
+                    pass: BIG_STRIDE / 16,
+                    priority: 16,
                 })
             },
         });
