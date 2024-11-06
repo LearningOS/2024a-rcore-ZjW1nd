@@ -393,9 +393,10 @@ impl DiskInode {
 pub struct DirEntry {
     name: [u8; NAME_LENGTH_LIMIT + 1],
     inode_id: u32,
+    pub valid : bool,
 }
 /// Size of a directory entry
-pub const DIRENT_SZ: usize = 32;
+pub const DIRENT_SZ: usize = 36;// change！！！
 
 impl DirEntry {
     /// Create an empty directory entry
@@ -403,6 +404,7 @@ impl DirEntry {
         Self {
             name: [0u8; NAME_LENGTH_LIMIT + 1],
             inode_id: 0,
+            valid:true,
         }
     }
     /// Crate a directory entry from name and inode number
@@ -412,6 +414,7 @@ impl DirEntry {
         Self {
             name: bytes,
             inode_id,
+            valid:true,
         }
     }
     /// Serialize into bytes
@@ -431,4 +434,15 @@ impl DirEntry {
     pub fn inode_id(&self) -> u32 {
         self.inode_id
     }
+
+    /// remove the direntry
+    pub fn remove(&mut self){
+        self.valid = false;
+    }
+
+    /// check if valid
+    pub fn is_valid(&self) -> bool{
+        self.valid
+    }
+
 }

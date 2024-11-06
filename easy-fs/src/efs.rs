@@ -129,7 +129,7 @@ impl EasyFileSystem {
     pub fn alloc_inode(&mut self) -> u32 {
         self.inode_bitmap.alloc(&self.block_device).unwrap() as u32
     }
-
+    
     /// Allocate a data block
     pub fn alloc_data(&mut self) -> u32 {
         self.data_bitmap.alloc(&self.block_device).unwrap() as u32 + self.data_area_start_block
@@ -147,5 +147,17 @@ impl EasyFileSystem {
             &self.block_device,
             (block_id - self.data_area_start_block) as usize,
         )
+    }
+
+    /// get inode idx, 参考get_disk_inode_pos的实现
+    pub fn get_inode_num(&self, block_id: usize, block_offset:usize) -> usize {
+        //vfs 能传入blockid和block offset, 怎么取得inode号？
+        let inode_size = core::mem::size_of::<DiskInode>();
+        let inodes_per_block = BLOCK_SZ / inode_size;
+        // 我们本质上是从vfs拿到inode的块号和偏移然后计算出在inode区内部该inode的编号
+        // 因此需要算出前面所有block已经有多少inode和当前块内的inode
+        // copilot
+        let inode_num = (block_id - self.inode_area_start_block as usize) * inodes_per_block + block_offset / inode_size;
+        inode_num
     }
 }

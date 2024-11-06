@@ -8,11 +8,12 @@ use super::File;
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
-use alloc::sync::Arc;
+use alloc::{collections::btree_map::BTreeMap, sync::Arc};
 use alloc::vec::Vec;
 use bitflags::*;
 use easy_fs::{EasyFileSystem, Inode};
 use lazy_static::*;
+
 
 /// inode in memory
 /// A wrapper around a filesystem inode
@@ -55,10 +56,14 @@ impl OSInode {
 }
 
 lazy_static! {
+    /// ROOT INODE    
     pub static ref ROOT_INODE: Arc<Inode> = {
         let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
         Arc::new(EasyFileSystem::root_inode(&efs))
     };
+    /// count for links
+    pub static ref COUNT_LINKS: UPSafeCell<BTreeMap<usize, usize>> = unsafe { UPSafeCell::new(BTreeMap::new()) };
+
 }
 
 /// List all apps in the root directory
@@ -114,11 +119,12 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
                 .create(name)
                 .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
         }
-    } else {
+    } else {// no CREATE flag
         ROOT_INODE.find(name).map(|inode| {
             if flags.contains(OpenFlags::TRUNC) {
                 inode.clear();
             }
+            println!("find name {} inode: {}", name,inode.get_inode_num());
             Arc::new(OSInode::new(readable, writable, inode))
         })
     }
@@ -154,5 +160,42 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    /// 这个inode信息又要去fs中获取和实现，为Inode添加方法
+    fn get_inode_num(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        inner.inode.get_inode_num()
+    }
+
+    /// 
+    fn get_nlink_num(&self) -> usize {
+        let count_map = COUNT_LINKS.exclusive_access();
+        let inode = self.get_inode_num();
+        *count_map.get(&inode).unwrap_or(&1)
+    }
+}
+
+/// Increase the nlink of inode
+pub fn increase_nlink(inode_id: usize) {
+    if COUNT_LINKS.exclusive_access().contains_key(&inode_id) {
+        let mut nlink_map = COUNT_LINKS.exclusive_access();
+        let nlink = nlink_map.get_mut(&inode_id).unwrap();
+        *nlink += 1;
+    } else {
+        COUNT_LINKS.exclusive_access().insert(inode_id, 2);
+    }
+}
+
+/// Decrease the nlink of inode
+pub fn decrease_nlink(inode_id: usize) {
+    let mut nlink_map = COUNT_LINKS.exclusive_access();
+    match nlink_map.get_mut(&inode_id) {
+        Some(nlink) => {
+            *nlink -= 1;
+            if *nlink == 0 {
+                nlink_map.remove(&inode_id);
+            }
+        }
+        None => {}
     }
 }

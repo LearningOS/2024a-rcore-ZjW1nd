@@ -52,7 +52,10 @@ impl Inode {
                 disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device,),
                 DIRENT_SZ,
             );
-            if dirent.name() == name {
+            if !dirent.is_valid() {
+                continue;
+            }
+            if dirent.is_valid() && dirent.name() == name {
                 return Some(dirent.inode_id() as u32);
             }
         }
@@ -150,6 +153,9 @@ impl Inode {
                     disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device,),
                     DIRENT_SZ,
                 );
+                if !dirent.is_valid() {
+                    continue;
+                }
                 v.push(String::from(dirent.name()));
             }
             v
@@ -182,5 +188,94 @@ impl Inode {
             }
         });
         block_cache_sync_all();
+    }
+    /// add a node link to specific name
+    pub fn link(&self, inode_id : usize, name: &str){
+        let mut fs = self.fs.lock();
+        // copied from inode.create()
+        let op = |root_inode: &DiskInode| {
+            // assert it is a directory
+            assert!(root_inode.is_dir());
+            // has the file been created?
+            self.find_inode_id(name, root_inode)
+        };
+        if let Some(_) = self.read_disk_inode(op) {
+            // new name exists, undefined
+            return ();
+        }
+        // initialize inode
+        self.modify_disk_inode(|root_inode| {
+            // append file in the dirent
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            // increase size
+            self.increase_size(new_size as u32, root_inode, &mut fs);
+            // write dirent
+            let dirent = DirEntry::new(name, inode_id as u32);
+            root_inode.write_at(
+                file_count * DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+        });
+        block_cache_sync_all();
+        // release efs lock automatically by compiler
+    }
+
+    /// unlink spec name inode
+    pub fn unlink(&self, name:&str) -> Option<DirEntry> {
+        // let op = |root_inode: &DiskInode| {
+        //     // assert it is a directory
+        //     assert!(root_inode.is_dir());
+        //     // has the file been created?
+        //     self.find_inode_id(name, root_inode)
+        // };
+        // if let None =  self.read_disk_inode(op) {
+        //     return -1;
+        // }
+        // 要实现唯一情况下的删除
+        // 将所有的当前inode（root）下指向name的inode删掉
+        self.modify_disk_inode(|root_inode| {
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            for i in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    root_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device),
+                    DIRENT_SZ,
+                );
+                if dirent.name() == name {
+                    dirent.valid=false;
+                    dirent.remove();
+                    root_inode.write_at(i * DIRENT_SZ, dirent.as_bytes(), &self.block_device);
+                }    
+            }
+        });
+        block_cache_sync_all(); // not found
+        self.get_dirent_by_name(name)
+    }
+    /// get this node info - inode number
+    pub fn get_inode_num(&self) -> usize {
+        let fs = self.fs.lock();
+        // vfs不够，还需要再往下一层，inode号要去下一层查找
+        fs.get_inode_num(self.block_id ,self.block_offset)
+    }
+
+    /// get dirent
+    pub fn get_dirent_by_name(&self, name: &str) -> Option<DirEntry> {
+        let mut dirent = DirEntry::empty();
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            for i in 0..file_count {
+                assert_eq!(
+                    disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                if dirent.name() == name {
+                    return Some(dirent);
+                }
+            }
+            None
+        })
     }
 }
