@@ -1,7 +1,7 @@
 //! Types related to task management & Functions for completely changing TCB
-use super::TaskContext;
+use super::{TaskContext, BIG_STRIDE};
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
@@ -10,7 +10,6 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
-use crate::task::BIG_STRIDE;
 
 /// Task control block structure
 ///
@@ -24,7 +23,7 @@ pub struct TaskControlBlock {
     pub kernel_stack: KernelStack,
 
     /// Mutable
-    pub inner: UPSafeCell<TaskControlBlockInner>,
+    pub(crate) inner: UPSafeCell<TaskControlBlockInner>,
 }
 
 impl TaskControlBlock {
@@ -38,7 +37,8 @@ impl TaskControlBlock {
         inner.memory_set.token()
     }
 }
-/// Inner of tcb
+
+/// Task control block structure
 pub struct TaskControlBlockInner {
     /// The physical page number of the frame where the trap context is placed
     pub trap_cx_ppn: PhysPageNum,
@@ -65,7 +65,8 @@ pub struct TaskControlBlockInner {
 
     /// It is set when active exit or execution error occurs
     pub exit_code: i32,
-    /// fd table for process
+
+    /// File descriptor table
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
 
     /// Heap bottom
@@ -73,36 +74,40 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
-    /// 第一次被调度时间
-    pub time: usize,
-    /// 使用的各个系统调用次数
-    pub syscall_times: [u32; 500],
-    /// Stride 
+
+    /// The number of syscalls called by the task
+    pub task_syscall_times: [u32; MAX_SYSCALL_NUM],
+
+    /// The total running time of the task
+    pub task_time: usize,
+
+    /// Stride stride
     pub stride: isize,
-    /// pass
+
+    /// Pass of Stride
     pub pass: isize,
-    /// priority 为什么都是有符号数？
+
+    /// Priority of Stride
     pub priority: isize,
 }
 
 impl TaskControlBlockInner {
-    /// get trap context
+    /// i didn't write this don't ask me
     pub fn get_trap_cx(&self) -> &'static mut TrapContext {
         self.trap_cx_ppn.get_mut()
     }
-    /// get user token
+    /// whatever
     pub fn get_user_token(&self) -> usize {
         self.memory_set.token()
     }
-    /// get status
     fn get_status(&self) -> TaskStatus {
         self.task_status
     }
-    /// is zombie
+    /// check if the task is zombie
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
     }
-    /// alloc fd for cur process
+    /// whatever
     pub fn alloc_fd(&mut self) -> usize {
         if let Some(fd) = (0..self.fd_table.len()).find(|fd| self.fd_table[*fd].is_none()) {
             fd
@@ -152,8 +157,8 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
-                    time : 0,
-                    syscall_times: [0;500],
+                    task_syscall_times: [0; MAX_SYSCALL_NUM],
+                    task_time: 0,
                     stride: 0,
                     pass: BIG_STRIDE / 16,
                     priority: 16,
@@ -238,8 +243,8 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
-                    time : 0,
-                    syscall_times: [0;500],
+                    task_syscall_times: [0; MAX_SYSCALL_NUM],
+                    task_time: 0,
                     stride: 0,
                     pass: BIG_STRIDE / 16,
                     priority: 16,
@@ -272,7 +277,7 @@ impl TaskControlBlock {
         if new_brk < heap_bottom as isize {
             return None;
         }
-        let result = if size <= 0 {//sbrk 0 panic if goto append
+        let result = if size < 0 {
             inner
                 .memory_set
                 .shrink_to(VirtAddr(heap_bottom), VirtAddr(new_brk as usize))

@@ -7,12 +7,11 @@
 use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
-use crate::sync::UPSafeCell;
-use crate::trap::TrapContext;
-use crate::mm::{VirtAddr, MapPermission};
-use crate::timer::get_time_ms;
 use crate::config::MAX_SYSCALL_NUM;
-
+use crate::mm::{MapPermission, VirtAddr};
+use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
+use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
 
@@ -65,7 +64,7 @@ pub fn run_tasks() {
             let mut task_inner = task.inner_exclusive_access();
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
-            task_inner.time = get_time_ms();
+            task_inner.task_time = get_time_ms() - task_inner.task_time;
             // release coming task_inner manually
             drop(task_inner);
             // release coming task TCB manually
@@ -115,32 +114,38 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     }
 }
 
-/// changed to here
+/// Get the syscall times of current task.
+pub fn get_syscall_times() -> [u32; MAX_SYSCALL_NUM] {
+    current_task().unwrap().inner_exclusive_access().task_syscall_times
+}
+
+/// Get the total running time of current task.
 pub fn get_current_task_time() -> usize {
-    current_task().unwrap().inner_exclusive_access().time
+    current_task().unwrap().inner_exclusive_access().task_time
 }
 
-/// changed to here
-pub fn get_current_syscall_times() -> [u32; MAX_SYSCALL_NUM] {
-    current_task().unwrap().inner_exclusive_access().syscall_times
+/// Update the syscall times of current task.
+pub fn update_syscall_times(syscall_id: usize) {
+    current_task()
+        .unwrap()
+        .inner_exclusive_access()
+        .task_syscall_times[syscall_id] += 1;
 }
 
-/// count syscall
-pub fn count_syscall(syscall_id: usize) {
-    let task = current_task().unwrap();
-    task.inner_exclusive_access().syscall_times[syscall_id] += 1;
-}
-
-/// wrap for insert_framed_area
+/// Insert a new framed area into the memory set of the task.
 pub fn insert_framed_area(start: VirtAddr, end: VirtAddr, permission: MapPermission) {
-    current_task().unwrap()
-    .inner_exclusive_access()
-    .memory_set.insert_framed_area(start, end, permission);
+    current_task()
+        .unwrap()
+        .inner_exclusive_access()
+        .memory_set
+        .insert_framed_area(start, end, permission);
 }
 
-/// wrap for delete_framed_area
-pub fn delete_framed_area(start: VirtAddr, end: VirtAddr) {
-    current_task().unwrap()
-    .inner_exclusive_access()
-    .memory_set.delete_framed_area(start, end);
+/// Drop a framed area from the memory set of the task.
+pub fn drop_frame_area(start: VirtAddr, end: VirtAddr) {
+    current_task()
+        .unwrap()
+        .inner_exclusive_access()
+        .memory_set
+        .drop_frame_area(start, end);
 }

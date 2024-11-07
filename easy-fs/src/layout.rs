@@ -8,7 +8,7 @@ const EFS_MAGIC: u32 = 0x3b800001;
 /// The max number of direct inodes
 const INODE_DIRECT_COUNT: usize = 28;
 /// The max length of inode name
-const NAME_LENGTH_LIMIT: usize = 27;
+const NAME_LENGTH_LIMIT: usize = 26;
 /// The max number of indirect1 inodes
 const INODE_INDIRECT1_COUNT: usize = BLOCK_SZ / 4;
 /// The max number of indirect2 inodes
@@ -391,20 +391,20 @@ impl DiskInode {
 /// A directory entry
 #[repr(C)]
 pub struct DirEntry {
+    valid: bool,
     name: [u8; NAME_LENGTH_LIMIT + 1],
     inode_id: u32,
-    pub valid : bool,
 }
 /// Size of a directory entry
-pub const DIRENT_SZ: usize = 36;// change！！！
+pub const DIRENT_SZ: usize = 32;
 
 impl DirEntry {
     /// Create an empty directory entry
     pub fn empty() -> Self {
         Self {
+            valid: true,
             name: [0u8; NAME_LENGTH_LIMIT + 1],
             inode_id: 0,
-            valid:true,
         }
     }
     /// Crate a directory entry from name and inode number
@@ -412,9 +412,9 @@ impl DirEntry {
         let mut bytes = [0u8; NAME_LENGTH_LIMIT + 1];
         bytes[..name.len()].copy_from_slice(name.as_bytes());
         Self {
+            valid: true,
             name: bytes,
             inode_id,
-            valid:true,
         }
     }
     /// Serialize into bytes
@@ -434,15 +434,12 @@ impl DirEntry {
     pub fn inode_id(&self) -> u32 {
         self.inode_id
     }
-
-    /// remove the direntry
-    pub fn remove(&mut self){
-        self.valid = false;
-    }
-
-    /// check if valid
-    pub fn is_valid(&self) -> bool{
+    /// Check if the entry is valid
+    pub fn valid(&self) -> bool {
         self.valid
     }
-
+    /// Invalidate the entry
+    pub fn invalidate(&mut self) {
+        self.valid = false;
+    }
 }

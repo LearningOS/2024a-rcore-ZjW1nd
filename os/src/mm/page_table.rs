@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use bitflags::*;
 
 bitflags! {
-    ///page table entry flags
+    /// page table entry flags
     pub struct PTEFlags: u8 {
         /// Valid
         const V = 1 << 0;
@@ -284,13 +284,13 @@ impl Iterator for UserBufferIterator {
         }
     }
 }
-/// virt to phys, 手搓页表查询
-pub fn virt_to_phys(token: usize, vaddr: usize) -> usize {
-    let vaddr_t: VirtAddr = vaddr.into();
-    let vpn = vaddr_t.floor();
-    let page_table_t = PageTable::from_token(token);
-    let ppn = page_table_t.translate(vpn).unwrap().ppn();// bad, panic if no entry
-    let ppn:usize = ppn.into();// shadow
-    let paddr = ppn<<12 | vaddr_t.page_offset();
-    paddr
+
+/// Translate a virtual address to a physical address
+pub fn translate_va_to_pa(token: usize, ptr: usize) -> usize {
+    let page_table = PageTable::from_token(token);
+    let va = VirtAddr::from(ptr);
+    let vpn = va.floor();
+    let ppn = page_table.translate(vpn).unwrap().ppn();
+    let pa = usize::from(ppn) << 12 | va.page_offset();
+    pa.into()
 }

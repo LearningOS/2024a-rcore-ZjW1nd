@@ -4,16 +4,16 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
+
 use super::File;
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
-use alloc::{collections::btree_map::BTreeMap, sync::Arc};
 use alloc::vec::Vec;
+use alloc::{collections::btree_map::BTreeMap, sync::Arc};
 use bitflags::*;
 use easy_fs::{EasyFileSystem, Inode};
 use lazy_static::*;
-
 
 /// inode in memory
 /// A wrapper around a filesystem inode
@@ -56,14 +56,12 @@ impl OSInode {
 }
 
 lazy_static! {
-    /// ROOT INODE    
+    /// The root inode
     pub static ref ROOT_INODE: Arc<Inode> = {
         let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
         Arc::new(EasyFileSystem::root_inode(&efs))
     };
-    /// count for links
-    pub static ref COUNT_LINKS: UPSafeCell<BTreeMap<usize, usize>> = unsafe { UPSafeCell::new(BTreeMap::new()) };
-
+    pub static ref NLINK_MAP: UPSafeCell<BTreeMap<usize, usize>> = unsafe { UPSafeCell::new(BTreeMap::new()) };
 }
 
 /// List all apps in the root directory
@@ -105,6 +103,36 @@ impl OpenFlags {
     }
 }
 
+/// Increase the nlink of inode
+pub fn increase_nlink(inode_id: usize) {
+    if NLINK_MAP.exclusive_access().contains_key(&inode_id) {
+        let mut nlink_map = NLINK_MAP.exclusive_access();
+        let nlink = nlink_map.get_mut(&inode_id).unwrap();
+        *nlink += 1;
+    } else {
+        NLINK_MAP.exclusive_access().insert(inode_id, 2);
+    }
+}
+
+/// Decrease the nlink of inode
+pub fn decrease_nlink(inode_id: usize) {
+    let mut nlink_map = NLINK_MAP.exclusive_access();
+    match nlink_map.get_mut(&inode_id) {
+        Some(nlink) => {
+            *nlink -= 1;
+            if *nlink == 0 {
+                nlink_map.remove(&inode_id);
+            }
+        }
+        None => {}
+    }
+}
+
+fn get_nlink(inode_id: usize) -> usize {
+    let nlink_map = NLINK_MAP.exclusive_access();
+    *nlink_map.get(&inode_id).unwrap_or(&1)
+}
+
 /// Open a file
 pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     let (readable, writable) = flags.read_write();
@@ -119,12 +147,11 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
                 .create(name)
                 .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
         }
-    } else {// no CREATE flag
+    } else {
         ROOT_INODE.find(name).map(|inode| {
             if flags.contains(OpenFlags::TRUNC) {
                 inode.clear();
             }
-            println!("find name {} inode: {}", name,inode.get_inode_num());
             Arc::new(OSInode::new(readable, writable, inode))
         })
     }
@@ -161,41 +188,12 @@ impl File for OSInode {
         }
         total_write_size
     }
-    /// 这个inode信息又要去fs中获取和实现，为Inode添加方法
-    fn get_inode_num(&self) -> usize {
+    fn get_inode_id(&self) -> usize {
         let inner = self.inner.exclusive_access();
-        inner.inode.get_inode_num()
+        inner.inode.get_inode_id()
     }
-
-    /// 
-    fn get_nlink_num(&self) -> usize {
-        let count_map = COUNT_LINKS.exclusive_access();
-        let inode = self.get_inode_num();
-        *count_map.get(&inode).unwrap_or(&1)
-    }
-}
-
-/// Increase the nlink of inode
-pub fn increase_nlink(inode_id: usize) {
-    if COUNT_LINKS.exclusive_access().contains_key(&inode_id) {
-        let mut nlink_map = COUNT_LINKS.exclusive_access();
-        let nlink = nlink_map.get_mut(&inode_id).unwrap();
-        *nlink += 1;
-    } else {
-        COUNT_LINKS.exclusive_access().insert(inode_id, 2);
-    }
-}
-
-/// Decrease the nlink of inode
-pub fn decrease_nlink(inode_id: usize) {
-    let mut nlink_map = COUNT_LINKS.exclusive_access();
-    match nlink_map.get_mut(&inode_id) {
-        Some(nlink) => {
-            *nlink -= 1;
-            if *nlink == 0 {
-                nlink_map.remove(&inode_id);
-            }
-        }
-        None => {}
+    fn get_nlink(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        get_nlink(inner.inode.get_inode_id())
     }
 }
