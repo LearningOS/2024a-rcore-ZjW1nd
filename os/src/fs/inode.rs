@@ -1,29 +1,20 @@
-//! `Arc<Inode>` -> `OSInodeInner`: In order to open files concurrently
-//! we need to wrap `Inode` into `Arc`,but `Mutex` in `Inode` prevents
-//! file systems from being accessed simultaneously
-//!
-//! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
-//! need to wrap `OSInodeInner` into `UPSafeCell`
-
 use super::File;
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use alloc::{collections::btree_map::BTreeMap, sync::Arc};
 use bitflags::*;
 use easy_fs::{EasyFileSystem, Inode};
 use lazy_static::*;
 
 /// inode in memory
-/// A wrapper around a filesystem inode
-/// to implement File trait atop
 pub struct OSInode {
     readable: bool,
     writable: bool,
     inner: UPSafeCell<OSInodeInner>,
 }
-/// The OS inode inner in 'UPSafeCell'
+/// inner of inode in memory
 pub struct OSInodeInner {
     offset: usize,
     inode: Arc<Inode>,
@@ -32,14 +23,16 @@ pub struct OSInodeInner {
 impl OSInode {
     /// create a new inode in memory
     pub fn new(readable: bool, writable: bool, inode: Arc<Inode>) -> Self {
+        trace!("kernel: OSInode::new");
         Self {
             readable,
             writable,
             inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode }) },
         }
     }
-    /// read all data from the inode
+    /// read all data from the inode in memory
     pub fn read_all(&self) -> Vec<u8> {
+        trace!("kernel: OSInode::read_all");
         let mut inner = self.inner.exclusive_access();
         let mut buffer = [0u8; 512];
         let mut v: Vec<u8> = Vec::new();
@@ -56,12 +49,10 @@ impl OSInode {
 }
 
 lazy_static! {
-    /// The root inode
     pub static ref ROOT_INODE: Arc<Inode> = {
         let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
         Arc::new(EasyFileSystem::root_inode(&efs))
     };
-    pub static ref NLINK_MAP: UPSafeCell<BTreeMap<usize, usize>> = unsafe { UPSafeCell::new(BTreeMap::new()) };
 }
 
 /// List all apps in the root directory
@@ -103,38 +94,9 @@ impl OpenFlags {
     }
 }
 
-/// Increase the nlink of inode
-pub fn increase_nlink(inode_id: usize) {
-    if NLINK_MAP.exclusive_access().contains_key(&inode_id) {
-        let mut nlink_map = NLINK_MAP.exclusive_access();
-        let nlink = nlink_map.get_mut(&inode_id).unwrap();
-        *nlink += 1;
-    } else {
-        NLINK_MAP.exclusive_access().insert(inode_id, 2);
-    }
-}
-
-/// Decrease the nlink of inode
-pub fn decrease_nlink(inode_id: usize) {
-    let mut nlink_map = NLINK_MAP.exclusive_access();
-    match nlink_map.get_mut(&inode_id) {
-        Some(nlink) => {
-            *nlink -= 1;
-            if *nlink == 0 {
-                nlink_map.remove(&inode_id);
-            }
-        }
-        None => {}
-    }
-}
-
-fn get_nlink(inode_id: usize) -> usize {
-    let nlink_map = NLINK_MAP.exclusive_access();
-    *nlink_map.get(&inode_id).unwrap_or(&1)
-}
-
 /// Open a file
 pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
+    trace!("kernel: open_file: name = {}, flags = {:?}", name, flags);
     let (readable, writable) = flags.read_write();
     if flags.contains(OpenFlags::CREATE) {
         if let Some(inode) = ROOT_INODE.find(name) {
@@ -158,13 +120,17 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
 }
 
 impl File for OSInode {
+    /// file readable?
     fn readable(&self) -> bool {
         self.readable
     }
+    /// file writable?
     fn writable(&self) -> bool {
         self.writable
     }
+    /// read file data into buffer
     fn read(&self, mut buf: UserBuffer) -> usize {
+        trace!("kernel: OSInode::read");
         let mut inner = self.inner.exclusive_access();
         let mut total_read_size = 0usize;
         for slice in buf.buffers.iter_mut() {
@@ -177,7 +143,9 @@ impl File for OSInode {
         }
         total_read_size
     }
+    /// write buffer data into file
     fn write(&self, buf: UserBuffer) -> usize {
+        trace!("kernel: OSInode::write");
         let mut inner = self.inner.exclusive_access();
         let mut total_write_size = 0usize;
         for slice in buf.buffers.iter() {
@@ -187,13 +155,5 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
-    }
-    fn get_inode_id(&self) -> usize {
-        let inner = self.inner.exclusive_access();
-        inner.inode.get_inode_id()
-    }
-    fn get_nlink(&self) -> usize {
-        let inner = self.inner.exclusive_access();
-        get_nlink(inner.inode.get_inode_id())
     }
 }
